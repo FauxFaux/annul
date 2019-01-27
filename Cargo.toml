@@ -15,3 +15,5 @@ walkdir = "2.2.7"
 zstd = "0.4"
 
 splayers = { git = "https://github.com/FauxFaux/splayers" }
+iowrap = "0.2.0"
+memchr = "2.1.3"

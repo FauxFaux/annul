@@ -1,0 +1,15 @@
+mirror = http://urika:3142/debian
+dest = /mnt/data/annul
+suffix = /debian.log
+script = target/release/annul
+
+pool big
+    depth = 8
+
+pool massive
+    depth = 4
+
+rule process-source
+    command = $script $url $dest
+
+include sid.ninja

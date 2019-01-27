@@ -4,6 +4,7 @@ use std::io;
 use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
+use std::path::Path;
 
 use byteorder::WriteBytesExt;
 use byteorder::LE;
@@ -11,6 +12,7 @@ use cast::u64;
 use failure::bail;
 use failure::ensure;
 use failure::err_msg;
+use failure::format_err;
 use failure::Error;
 use failure::ResultExt;
 use iowrap::ReadMany;
@@ -23,15 +25,80 @@ fn main() -> Result<(), Error> {
     let mut cwd = env::current_dir()?;
     cwd.push(dest);
     let dest = cwd;
-    let root = dest.parent().ok_or(err_msg("file output please"))?;
+    fs::create_dir_all(&dest)?;
 
-    let mut tmp = tempfile::NamedTempFile::new()?;
-    http_req::request::get(src, &mut tmp).with_context(|_| err_msg("downloading"))?;
+    let mut dsc = Vec::new();
+    http_req::request::get(&src, &mut dsc).with_context(|_| err_msg("downloading dsc"))?;
 
-    let unpack = splayers::Unpack::unpack_into(tmp.path(), root)
-        .with_context(|_| err_msg("unpacking failed"))?;
+    let dsc_url = url::Url::parse(&src)?;
 
-    let out = tempfile_fast::PersistableTempFile::new_in(root)?;
+    let paths = paths(&String::from_utf8_lossy(&dsc))?;
+
+    let mut last = None;
+
+    for path in paths {
+        assert!(!path.contains('/'));
+        if path.ends_with(".asc") {
+            continue;
+        }
+
+        let out = dest.join(&format!("{}.annul", path));
+
+        if out.exists() {
+            continue;
+        }
+
+        let sub_url = dsc_url.join(&path)?;
+
+        let mut tmp = tempfile::NamedTempFile::new()?;
+        http_req::request::get(sub_url, &mut tmp).with_context(|_| err_msg("downloading"))?;
+
+        if let Err(e) =
+            unarchive(tmp.path(), &out).with_context(|_| format_err!("processing {}", path))
+        {
+            eprintln!("{:?}", e);
+            last = Some(Err(e));
+        }
+    }
+
+    if let Some(e) = last {
+        e?
+    } else {
+        Ok(())
+    }
+}
+
+fn paths(dsc: &str) -> Result<Vec<String>, Error> {
+    let mut ret = Vec::new();
+    let mut on = false;
+    for line in dsc.lines() {
+        if line == "Files:" {
+            on = true;
+            continue;
+        }
+
+        if !on {
+            continue;
+        }
+
+        if !line.starts_with(' ') {
+            break;
+        }
+
+        let parts: Vec<_> = line.split(' ').collect();
+        ret.push(parts[parts.len() - 1].to_string());
+    }
+
+    Ok(ret)
+}
+
+fn unarchive(src: &Path, dest: &Path) -> Result<(), Error> {
+    let root = dest.parent().ok_or(err_msg("root?"))?;
+
+    let unpack =
+        splayers::Unpack::unpack_into(src, &root).with_context(|_| err_msg("unpacking failed"))?;
+
+    let out = tempfile_fast::PersistableTempFile::new_in(&root)?;
 
     let mut out = zstd::Encoder::new(out, 0)?;
 
@@ -112,5 +179,6 @@ fn likely_text(buf: &[u8]) -> bool {
         return false;
     }
 
-    !buf.iter().any(|&b| 4 == b || (b >= 5 && b <= 8) || (b >= 14 && b <= 26))
+    !buf.iter()
+        .any(|&b| 4 == b || (b >= 5 && b <= 8) || (b >= 14 && b <= 26))
 }

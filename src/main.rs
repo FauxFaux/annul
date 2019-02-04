@@ -19,6 +19,8 @@ use iowrap::ReadMany;
 use splayers::Entry;
 use splayers::Status;
 
+mod strings;
+
 fn main() -> Result<(), Error> {
     let src = env::args().nth(1).ok_or(err_msg("first arg: src"))?;
     let dest = env::args_os().nth(2).ok_or(err_msg("second arg: dest"))?;
@@ -29,7 +31,11 @@ fn main() -> Result<(), Error> {
 
     let src_url = url::Url::parse(&src)?;
 
-    let path = src_url.path_segments().ok_or(err_msg("not path"))?.last().ok_or(err_msg("no end path"))?;
+    let path = src_url
+        .path_segments()
+        .ok_or(err_msg("not path"))?
+        .last()
+        .ok_or(err_msg("no end path"))?;
 
     let out = dest.join(&format!("{}.annul", path));
 
@@ -45,7 +51,12 @@ fn main() -> Result<(), Error> {
     let mut tmp = tempfile::NamedTempFile::new()?;
     http_req::request::get(sub_url, &mut tmp).with_context(|_| err_msg("downloading"))?;
 
-    unarchive(tmp.path(), &out).with_context(|_| format_err!("processing {}", path))?;
+    std::thread::Builder::new()
+        .name(path.to_string())
+        .spawn(move || unarchive(tmp.path(), &out))?
+        .join()
+        .map_err(|_| err_msg("panic"))
+        .with_context(|_| format_err!("processing {}", path))??;
 
     Ok(())
 }

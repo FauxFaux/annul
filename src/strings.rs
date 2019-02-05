@@ -1,21 +1,7 @@
 use std::io;
 use std::io::Write;
 
-struct UtfState {
-    wanted: u8,
-    seen: u8,
-}
-
-struct MaybeString {
-    bytes: Vec<u8>,
-    inside_utf: Option<UtfState>,
-}
-
-struct StringWriter<W> {
-    inner: W,
-}
-
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum ShortArray {
     One([u8; 1]),
     Two([u8; 2]),
@@ -23,7 +9,7 @@ enum ShortArray {
     Four([u8; 4]),
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Char {
     Binary(u8),
     Printable(ShortArray),
@@ -105,35 +91,95 @@ fn follower(byte: u8) -> bool {
     byte & 0b1100_0000 == 0b1000_0000
 }
 
-fn find_chars(data: &[u8]) -> (Vec<Char>, &[u8]) {
-    let mut chars = Vec::with_capacity(data.len());
-
-    let mut ptr = data;
-    while !ptr.is_empty() {
-        match get_char(ptr) {
-            Some(c) => {
-                chars.push(c);
-                ptr = &ptr[c.len()..];
-            }
-            None => {
-                break;
-            }
-        }
-    }
-
-    (chars, ptr)
+struct CharBuf {
+    buf: Vec<u8>,
 }
 
-#[derive(Clone, Debug)]
-struct Strings<W> {
+impl CharBuf {
+    fn push(&mut self, byte: u8) -> Option<Char> {
+        self.buf.push(byte);
+
+        let opt = get_char(&self.buf);
+        if let Some(c) = opt {
+            let _ = self.buf.drain(..c.len());
+        }
+
+        opt
+    }
+}
+
+impl Default for CharBuf {
+    fn default() -> Self {
+        CharBuf {
+            buf: Vec::with_capacity(5),
+        }
+    }
+}
+
+struct StringBuf<W> {
     output: W,
+    chars: CharBuf,
     buf: Vec<u8>,
     binaries: usize,
 }
 
-impl<W> Strings<W> {
-    fn new(output: W) -> Strings<W> {
-        Strings {
+impl<W: Write> StringBuf<W> {
+    fn accept(&mut self, buf: &[u8]) -> io::Result<()> {
+        for &b in buf {
+            self.push(b)?;
+        }
+        Ok(())
+    }
+
+    fn push(&mut self, b: u8) -> io::Result<()> {
+        let c = match self.chars.push(b) {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+
+        match c {
+            Char::Binary(c) if self.binaries < 2 => {
+                self.binaries += 1;
+                self.buf.push(c);
+            }
+
+            Char::Binary(_) => {
+                self.buf.truncate(self.buf.len() - self.binaries);
+
+                if self.buf.len() > 3 {
+                    self.output.write_all(&self.buf)?;
+                    self.output.write_all(&[0])?;
+                }
+                self.binaries = 0;
+                self.buf.clear()
+            }
+            Char::Printable(arr) => {
+                if self.binaries == self.buf.len() {
+                    self.buf.clear();
+                }
+                arr.push_to(&mut self.buf);
+                if self.buf.len() > 255 {
+                    self.output.write_all(&self.buf[..250])?;
+                    let _ = self.buf.drain(..250);
+                }
+                self.binaries = 0;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn finish(mut self) -> io::Result<W> {
+        self.output.write_all(&self.buf)?;
+        self.output.write_all(&self.chars.buf)?;
+        Ok(self.output)
+    }
+}
+
+impl<W> StringBuf<W> {
+    fn new(output: W) -> StringBuf<W> {
+        StringBuf {
+            chars: CharBuf::default(),
             output,
             buf: Vec::with_capacity(4096),
             binaries: 0,
@@ -141,53 +187,16 @@ impl<W> Strings<W> {
     }
 }
 
-impl<W: Write> Strings<W> {
-    fn accept(&mut self, data: &[u8]) -> io::Result<()> {
-        let (chars, waste) = find_chars(data);
-        for c in chars{
-            match c {
-                Char::Binary(c) if self.binaries < 2 => {
-                    self.binaries += 1;
-                    self.buf.push(c);
-                }
-
-                Char::Binary(_) => {
-                    for _ in 0..self.binaries {
-                        assert!(self.buf.pop().is_some());
-                    }
-
-                    if self.buf.len() > 3 {
-                        self.output.write_all(&self.buf)?;
-                        self.output.write_all(&[0])?;
-                    }
-                    self.binaries = 0;
-                    self.buf.clear()
-                }
-                Char::Printable(arr) => {
-                    if self.binaries == self.buf.len() {
-                        self.buf.clear();
-                    }
-                    arr.push_to(&mut self.buf);
-                    self.binaries = 0;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn finish(mut self) -> io::Result<W> {
-        self.output.write_all(&self.buf)?;
-        Ok(self.output)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::Strings;
+    use super::Char;
+    use super::CharBuf;
+    use super::ShortArray;
+    use super::StringBuf;
 
     fn check(expected: &[u8], data: &[u8]) {
         let mut actual = Vec::new();
-        let mut state = Strings::new(&mut actual);
+        let mut state = StringBuf::new(&mut actual);
         state.accept(data).expect("only for vec");
         state.finish().expect("only for vec");
 
@@ -206,5 +215,16 @@ mod tests {
     #[test]
     fn strings_crush_unprintable() {
         check(b"hello\0world", b"hello\0\x01\x02\x03world");
+    }
+
+    #[test]
+    fn charer() {
+        let mut c = CharBuf::default();
+        assert_eq!(Some(Char::Printable(ShortArray::One([b'h']))), c.push(b'h'));
+        assert_eq!(None, c.push(0b1101_1111));
+        assert_eq!(
+            Some(Char::Printable(ShortArray::Two([0b1101_1111, 0b1011_1111]))),
+            c.push(0b1011_1111)
+        );
     }
 }

@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
@@ -15,7 +16,6 @@ use failure::err_msg;
 use failure::format_err;
 use failure::Error;
 use failure::ResultExt;
-use iowrap::ReadMany;
 use splayers::Entry;
 use splayers::Status;
 
@@ -99,20 +99,31 @@ fn output<W: Write>(entries: &[Entry], paths: &[Box<[u8]>], out: &mut W) -> Resu
 
         let file = if let Some(temp) = entry.local.temp.as_ref() {
             let mut file = fs::File::open(temp)?;
-            let mut header = [0u8; 64 * 1024];
-            let read = file.read_many(&mut header)?;
-
-            if likely_text(&header[..read]) {
-                let data_len = file.metadata()?.len();
-
-                file.seek(SeekFrom::Start(0))?;
-
+            let mut stringed = tempfile::tempfile()?;
+            {
+                let mut stringer = strings::StringBuf::new(io::BufWriter::new(&mut stringed));
+                loop {
+                    let mut buf = [0u8; 16 * 1024];
+                    let len = file.read(&mut buf)?;
+                    if 0 == len {
+                        break;
+                    }
+                    let buf = &buf[..len];
+                    stringer.accept(buf)?;
+                }
+                stringer.finish()?.flush()?;
+            }
+            let original_len = file.metadata()?.len();
+            let new_len = stringed.metadata()?.len();
+            if original_len == new_len {
                 meta.push(0);
-                Some((file, data_len))
             } else {
                 meta.push(1);
-                None
             }
+
+            stringed.seek(SeekFrom::Start(0))?;
+
+            Some((stringed, new_len))
         } else {
             meta.push(2);
             None
@@ -158,13 +169,4 @@ fn output<W: Write>(entries: &[Entry], paths: &[Box<[u8]>], out: &mut W) -> Resu
         }
     }
     Ok(())
-}
-
-fn likely_text(buf: &[u8]) -> bool {
-    if memchr::memchr(0, buf).is_some() {
-        return false;
-    }
-
-    !buf.iter()
-        .any(|&b| 4 == b || (b >= 5 && b <= 8) || (b >= 14 && b <= 26))
 }

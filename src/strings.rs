@@ -116,7 +116,7 @@ impl Default for CharBuf {
     }
 }
 
-struct StringBuf<W> {
+pub struct StringBuf<W> {
     output: W,
     chars: CharBuf,
     buf: Vec<u8>,
@@ -124,7 +124,7 @@ struct StringBuf<W> {
 }
 
 impl<W: Write> StringBuf<W> {
-    fn accept(&mut self, buf: &[u8]) -> io::Result<()> {
+    pub fn accept(&mut self, buf: &[u8]) -> io::Result<()> {
         for &b in buf {
             self.push(b)?;
         }
@@ -169,7 +169,7 @@ impl<W: Write> StringBuf<W> {
         Ok(())
     }
 
-    fn finish(mut self) -> io::Result<W> {
+    pub fn finish(mut self) -> io::Result<W> {
         self.output.write_all(&self.buf)?;
         self.output.write_all(&self.chars.buf)?;
         Ok(self.output)
@@ -177,7 +177,7 @@ impl<W: Write> StringBuf<W> {
 }
 
 impl<W> StringBuf<W> {
-    fn new(output: W) -> StringBuf<W> {
+    pub fn new(output: W) -> StringBuf<W> {
         StringBuf {
             chars: CharBuf::default(),
             output,

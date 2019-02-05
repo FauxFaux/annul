@@ -117,57 +117,71 @@ fn find_chars(data: &[u8]) -> Vec<Char> {
 }
 
 #[derive(Clone, Debug)]
-struct StringState {
+struct Strings<W> {
+    output: W,
     buf: Vec<u8>,
     binaries: usize,
 }
 
-fn strings<W: Write>(data: &[u8], state: &mut StringState, mut out: W) -> Result<(), io::Error> {
-    for c in find_chars(data) {
-        match c {
-            Char::Binary(c) if state.binaries < 2 => {
-                state.binaries += 1;
-                state.buf.push(c);
-            }
-
-            Char::Binary(_) => {
-                for _ in 0..state.binaries {
-                    assert!(state.buf.pop().is_some());
-                }
-
-                if state.buf.len() > 3 {
-                    out.write_all(&state.buf)?;
-                    out.write_all(&[0])?;
-                }
-                state.binaries = 0;
-                state.buf.clear()
-            },
-            Char::Printable(arr) => {
-                if state.binaries == state.buf.len() {
-                    state.buf.clear();
-                }
-                arr.push_to(&mut state.buf);
-                state.binaries = 0;
-            },
-            Char::Short(_) => unimplemented!(),
+impl<W> Strings<W> {
+    fn new(output: W) -> Strings<W> {
+        Strings {
+            output,
+            buf: Vec::with_capacity(4096),
+            binaries: 0,
         }
     }
-    out.write_all(&state.buf)?;
-    Ok(())
+}
+
+impl<W: Write> Strings<W> {
+    fn accept(&mut self, data: &[u8]) -> io::Result<()> {
+        for c in find_chars(data) {
+            match c {
+                Char::Binary(c) if self.binaries < 2 => {
+                    self.binaries += 1;
+                    self.buf.push(c);
+                }
+
+                Char::Binary(_) => {
+                    for _ in 0..self.binaries {
+                        assert!(self.buf.pop().is_some());
+                    }
+
+                    if self.buf.len() > 3 {
+                        self.output.write_all(&self.buf)?;
+                        self.output.write_all(&[0])?;
+                    }
+                    self.binaries = 0;
+                    self.buf.clear()
+                }
+                Char::Printable(arr) => {
+                    if self.binaries == self.buf.len() {
+                        self.buf.clear();
+                    }
+                    arr.push_to(&mut self.buf);
+                    self.binaries = 0;
+                }
+                Char::Short(_) => unimplemented!(),
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> io::Result<W> {
+        self.output.write_all(&self.buf)?;
+        Ok(self.output)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::strings;
-    use super::StringState;
+    use super::Strings;
 
     fn check(expected: &[u8], data: &[u8]) {
-        let mut state = StringState {
-            buf: Vec::with_capacity(128),
-            binaries: 0,
-        };
         let mut actual = Vec::new();
-        strings(data, &mut state, &mut actual).expect("only for vec");
+        let mut state = Strings::new(&mut actual);
+        state.accept(data).expect("only for vec");
+        state.finish().expect("only for vec");
 
         assert_eq!(
             String::from_utf8_lossy(expected),

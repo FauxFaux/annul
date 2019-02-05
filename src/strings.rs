@@ -17,17 +17,16 @@ struct StringWriter<W> {
 
 #[derive(Copy, Clone, Debug)]
 enum ShortArray {
-    One(u8),
-    Two(u8, u8),
-    Three(u8, u8, u8),
-    Four(u8, u8, u8, u8),
+    One([u8; 1]),
+    Two([u8; 2]),
+    Three([u8; 3]),
+    Four([u8; 4]),
 }
 
 #[derive(Copy, Clone, Debug)]
 enum Char {
     Binary(u8),
     Printable(ShortArray),
-    Short(usize),
 }
 
 impl Char {
@@ -35,7 +34,6 @@ impl Char {
         match *self {
             Char::Binary(_) => 1,
             Char::Printable(arr) => arr.len(),
-            Char::Short(len) => len,
         }
     }
 }
@@ -52,50 +50,54 @@ impl ShortArray {
 
     fn push_to(&self, v: &mut Vec<u8>) {
         match *self {
-            ShortArray::One(a) => v.push(a),
-            ShortArray::Two(a, b) => v.extend_from_slice(&[a, b]),
-            ShortArray::Three(a, b, c) => v.extend_from_slice(&[a, b, c]),
-            ShortArray::Four(a, b, c, d) => v.extend_from_slice(&[a, b, c, d]),
+            ShortArray::One(a) => v.extend_from_slice(&a),
+            ShortArray::Two(a) => v.extend_from_slice(&a),
+            ShortArray::Three(a) => v.extend_from_slice(&a),
+            ShortArray::Four(a) => v.extend_from_slice(&a),
         }
     }
 }
 
-fn get_char(bytes: &[u8]) -> Char {
+fn get_char(bytes: &[u8]) -> Option<Char> {
     if bytes.is_empty() {
-        return Char::Short(1);
+        return None;
     }
 
     let byte = bytes[0];
     if byte < b' ' && b'\t' != byte && b'\n' != byte && b'\r' != byte {
-        return Char::Binary(byte);
+        return Some(Char::Binary(byte));
     }
 
     if byte < 0x7f {
-        return Char::Printable(ShortArray::One(byte));
+        return Some(Char::Printable(ShortArray::One([byte])));
     }
 
-    if byte & 0b1110_0000 == 0b1100_0000 && bytes.len() >= 2 && follower(bytes[1]) {
-        return Char::Printable(ShortArray::Two(bytes[0], bytes[1]));
+    let wanted = if byte & 0b1110_0000 == 0b1100_0000 {
+        2
+    } else if byte & 0b1111_0000 == 0b1110_0000 {
+        3
+    } else if byte & 0b1111_1000 == 0b1111_0000 {
+        4
+    } else {
+        return Some(Char::Binary(byte));
+    };
+
+    if bytes.len() < wanted {
+        return None;
     }
 
-    if byte & 0b1111_0000 == 0b1110_0000
-        && bytes.len() >= 3
-        && follower(bytes[1])
-        && follower(bytes[2])
-    {
-        return Char::Printable(ShortArray::Three(bytes[0], bytes[1], bytes[2]));
+    for i in 1..wanted {
+        if !follower(bytes[i]) {
+            return Some(Char::Binary(byte));
+        }
     }
 
-    if byte & 0b1111_1000 == 0b1111_0000
-        && bytes.len() >= 4
-        && follower(bytes[1])
-        && follower(bytes[2])
-        && follower(bytes[3])
-    {
-        return Char::Printable(ShortArray::Four(bytes[0], bytes[1], bytes[2], bytes[3]));
-    }
-
-    Char::Binary(byte)
+    Some(Char::Printable(match wanted {
+        2 => ShortArray::Two([bytes[0], bytes[1]]),
+        3 => ShortArray::Three([bytes[0], bytes[1], bytes[2]]),
+        4 => ShortArray::Four([bytes[0], bytes[1], bytes[2], bytes[3]]),
+        _ => unreachable!(),
+    }))
 }
 
 #[inline]
@@ -103,17 +105,23 @@ fn follower(byte: u8) -> bool {
     byte & 0b1100_0000 == 0b1000_0000
 }
 
-fn find_chars(data: &[u8]) -> Vec<Char> {
+fn find_chars(data: &[u8]) -> (Vec<Char>, &[u8]) {
     let mut chars = Vec::with_capacity(data.len());
 
     let mut ptr = data;
     while !ptr.is_empty() {
-        let c = get_char(ptr);
-        chars.push(c);
-        ptr = &ptr[c.len()..];
+        match get_char(ptr) {
+            Some(c) => {
+                chars.push(c);
+                ptr = &ptr[c.len()..];
+            }
+            None => {
+                break;
+            }
+        }
     }
 
-    chars
+    (chars, ptr)
 }
 
 #[derive(Clone, Debug)]
@@ -135,7 +143,8 @@ impl<W> Strings<W> {
 
 impl<W: Write> Strings<W> {
     fn accept(&mut self, data: &[u8]) -> io::Result<()> {
-        for c in find_chars(data) {
+        let (chars, waste) = find_chars(data);
+        for c in chars{
             match c {
                 Char::Binary(c) if self.binaries < 2 => {
                     self.binaries += 1;
@@ -161,7 +170,6 @@ impl<W: Write> Strings<W> {
                     arr.push_to(&mut self.buf);
                     self.binaries = 0;
                 }
-                Char::Short(_) => unimplemented!(),
             }
         }
         Ok(())

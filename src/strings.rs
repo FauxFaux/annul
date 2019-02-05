@@ -47,6 +47,14 @@ impl ShortArray {
             ShortArray::Four(..) => 4,
         }
     }
+
+    fn push_to(&self, v: &mut Vec<u8>) {
+        match *self {
+            ShortArray::Two(a, b) => v.extend_from_slice(&[a, b]),
+            ShortArray::Three(a, b, c) => v.extend_from_slice(&[a, b, c]),
+            ShortArray::Four(a, b, c, d) => v.extend_from_slice(&[a, b, c, d]),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,7 +153,7 @@ fn find_chars(data: &[u8]) -> Vec<Char> {
     let mut chars = Vec::with_capacity(data.len());
 
     let mut ptr = data;
-    loop {
+    while !ptr.is_empty() {
         let c = get_char(ptr);
         match c {
             Char::Short(missing) => {
@@ -153,7 +161,7 @@ fn find_chars(data: &[u8]) -> Vec<Char> {
                 assert_eq!(0, missing);
                 break;
             },
-            _ => (),
+            other => chars.push(other),
         }
         ptr = &ptr[c.len()..];
     }
@@ -164,18 +172,40 @@ fn find_chars(data: &[u8]) -> Vec<Char> {
 fn strings(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
     let mut buf = Vec::with_capacity(12);
+    let mut binaries = 0;
     for c in find_chars(data) {
         match c {
+            Char::Binary(c) if binaries < 2 => {
+                binaries += 1;
+                buf.push(c);
+            }
+
             Char::Binary(_) => {
+                for _ in 0..binaries {
+                    assert!(buf.pop().is_some());
+                }
+
                 if buf.len() > 3 {
                     out.extend_from_slice(&buf);
+                    out.push(0);
                 }
+                binaries = 0;
                 buf.clear()
             },
-            Char::Ascii(c) => buf.push(c),
-            Char::Utf(ShortArray::Two(a, b)) => buf.extend_from_slice(&[a, b]),
-            Char::Utf(ShortArray::Three(a, b, c)) => buf.extend_from_slice(&[a, b, c]),
-            Char::Utf(ShortArray::Four(a, b, c, d)) => buf.extend_from_slice(&[a, b, c, d]),
+            Char::Ascii(c) => {
+                if binaries == buf.len() {
+                    buf.clear();
+                }
+                buf.push(c);
+                binaries = 0;
+            },
+            Char::Utf(arr) => {
+                if binaries == buf.len() {
+                    buf.clear();
+                }
+                arr.push_to(&mut buf);
+                binaries = 0;
+            },
             Char::Short(_) => unimplemented!(),
         }
     }

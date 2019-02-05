@@ -16,6 +16,7 @@ struct StringWriter<W> {
 
 #[derive(Copy, Clone, Debug)]
 enum ShortArray {
+    One(u8),
     Two(u8, u8),
     Three(u8, u8, u8),
     Four(u8, u8, u8, u8),
@@ -23,17 +24,16 @@ enum ShortArray {
 
 #[derive(Copy, Clone, Debug)]
 enum Char {
-    Ascii(u8),
     Binary(u8),
-    Utf(ShortArray),
+    Printable(ShortArray),
     Short(usize),
 }
 
 impl Char {
     fn len(&self) -> usize {
         match *self {
-            Char::Ascii(_) | Char::Binary(_) => 1,
-            Char::Utf(arr) => arr.len(),
+            Char::Binary(_) => 1,
+            Char::Printable(arr) => arr.len(),
             Char::Short(len) => len,
         }
     }
@@ -42,6 +42,7 @@ impl Char {
 impl ShortArray {
     fn len(&self) -> usize {
         match self {
+            ShortArray::One(..) => 1,
             ShortArray::Two(..) => 2,
             ShortArray::Three(..) => 3,
             ShortArray::Four(..) => 4,
@@ -50,6 +51,7 @@ impl ShortArray {
 
     fn push_to(&self, v: &mut Vec<u8>) {
         match *self {
+            ShortArray::One(a) => v.push(a),
             ShortArray::Two(a, b) => v.extend_from_slice(&[a, b]),
             ShortArray::Three(a, b, c) => v.extend_from_slice(&[a, b, c]),
             ShortArray::Four(a, b, c, d) => v.extend_from_slice(&[a, b, c, d]),
@@ -89,11 +91,11 @@ fn get_char(bytes: &[u8]) -> Char {
     }
 
     if byte < 0x7f {
-        return Char::Ascii(byte);
+        return Char::Printable(ShortArray::One(byte));
     }
 
     if byte & 0b1110_0000 == 0b1100_0000 && bytes.len() >= 2 && follower(bytes[1]) {
-        return Char::Utf(ShortArray::Two(bytes[0], bytes[1]));
+        return Char::Printable(ShortArray::Two(bytes[0], bytes[1]));
     }
 
     if byte & 0b1111_0000 == 0b1110_0000
@@ -101,7 +103,7 @@ fn get_char(bytes: &[u8]) -> Char {
         && follower(bytes[1])
         && follower(bytes[2])
     {
-        return Char::Utf(ShortArray::Three(bytes[0], bytes[1], bytes[2]));
+        return Char::Printable(ShortArray::Three(bytes[0], bytes[1], bytes[2]));
     }
 
     if byte & 0b1111_1000 == 0b1111_0000
@@ -110,7 +112,7 @@ fn get_char(bytes: &[u8]) -> Char {
         && follower(bytes[2])
         && follower(bytes[3])
     {
-        return Char::Utf(ShortArray::Four(bytes[0], bytes[1], bytes[2], bytes[3]));
+        return Char::Printable(ShortArray::Four(bytes[0], bytes[1], bytes[2], bytes[3]));
     }
 
     Char::Binary(byte)
@@ -192,14 +194,7 @@ fn strings(data: &[u8]) -> Vec<u8> {
                 binaries = 0;
                 buf.clear()
             },
-            Char::Ascii(c) => {
-                if binaries == buf.len() {
-                    buf.clear();
-                }
-                buf.push(c);
-                binaries = 0;
-            },
-            Char::Utf(arr) => {
+            Char::Printable(arr) => {
                 if binaries == buf.len() {
                     buf.clear();
                 }

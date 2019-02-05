@@ -48,7 +48,7 @@ fn main() -> Result<(), Error> {
 
     let sub_url = src_url.join(&path)?;
 
-    let mut tmp = tempfile::NamedTempFile::new()?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dest)?;
     http_req::request::get(sub_url, &mut tmp).with_context(|_| err_msg("downloading"))?;
 
     let dictionary = if path.contains(".diff.") {
@@ -107,7 +107,7 @@ fn output<W: Write>(entries: &[Entry], paths: &[Box<[u8]>], out: &mut W) -> Resu
 
         let file = if let Some(temp) = entry.local.temp.as_ref() {
             let mut file = fs::File::open(temp)?;
-            let mut stringed = tempfile::tempfile()?;
+            let mut stringed = tempfile::tempfile_in(temp.parent().unwrap())?;
             {
                 let mut stringer = strings::StringBuf::new(io::BufWriter::new(&mut stringed));
                 loop {

@@ -51,9 +51,17 @@ fn main() -> Result<(), Error> {
     let mut tmp = tempfile::NamedTempFile::new()?;
     http_req::request::get(sub_url, &mut tmp).with_context(|_| err_msg("downloading"))?;
 
+    let dictionary = if path.contains(".diff.") {
+        &include_bytes!("../dicts/diff.zstd-dictionary")[..]
+    } else if path.contains(".debian.") {
+        &include_bytes!("../dicts/debian.tar.zstd-dictionary")[..]
+    } else {
+        &include_bytes!("../dicts/orig.zstd-dictionary")[..]
+    };
+
     std::thread::Builder::new()
         .name(path.to_string())
-        .spawn(move || unarchive(tmp.path(), &out))?
+        .spawn(move || unarchive(tmp.path(), &out, dictionary))?
         .join()
         .map_err(|_| err_msg("panic"))
         .with_context(|_| format_err!("processing {}", path))??;
@@ -61,7 +69,7 @@ fn main() -> Result<(), Error> {
     Ok(())
 }
 
-fn unarchive(src: &Path, dest: &Path) -> Result<(), Error> {
+fn unarchive(src: &Path, dest: &Path, dictionary: &[u8]) -> Result<(), Error> {
     let root = dest.parent().ok_or(err_msg("root?"))?;
 
     let unpack =
@@ -69,7 +77,7 @@ fn unarchive(src: &Path, dest: &Path) -> Result<(), Error> {
 
     let out = tempfile_fast::PersistableTempFile::new_in(&root)?;
 
-    let mut out = zstd::Encoder::new(out, 8)?;
+    let mut out = zstd::Encoder::with_dictionary(out, 8, dictionary)?;
 
     match *unpack.status() {
         splayers::Status::Success(ref entries) => output(entries, &[], &mut out)?,

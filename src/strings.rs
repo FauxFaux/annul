@@ -120,7 +120,8 @@ pub struct StringBuf<W> {
     output: W,
     chars: CharBuf,
     buf: Vec<u8>,
-    binaries: usize,
+    binary_run: usize,
+    binary_sum: usize,
 }
 
 impl<W: Write> StringBuf<W> {
@@ -138,31 +139,34 @@ impl<W: Write> StringBuf<W> {
         };
 
         match c {
-            Char::Binary(c) if self.binaries < 2 => {
-                self.binaries += 1;
+            Char::Binary(c) if self.binary_run < 2 && self.binary_sum < self.buf.len() / 4 => {
+                self.binary_run += 1;
+                self.binary_sum += 1;
                 self.buf.push(c);
             }
 
             Char::Binary(_) => {
-                self.buf.truncate(self.buf.len() - self.binaries);
+                self.buf.truncate(self.buf.len() - self.binary_run);
 
                 if self.buf.len() > 3 {
                     self.output.write_all(&self.buf)?;
                     self.output.write_all(&[0])?;
                 }
-                self.binaries = 0;
+                self.binary_run = 0;
+                self.binary_sum = 0;
                 self.buf.clear()
             }
             Char::Printable(arr) => {
-                if self.binaries == self.buf.len() {
+                if self.binary_run == self.buf.len() {
                     self.buf.clear();
                 }
                 arr.push_to(&mut self.buf);
                 if self.buf.len() > 255 {
                     self.output.write_all(&self.buf[..250])?;
+                    self.binary_sum = 0;
                     let _ = self.buf.drain(..250);
                 }
-                self.binaries = 0;
+                self.binary_run = 0;
             }
         }
 
@@ -182,7 +186,8 @@ impl<W> StringBuf<W> {
             chars: CharBuf::default(),
             output,
             buf: Vec::with_capacity(4096),
-            binaries: 0,
+            binary_run: 0,
+            binary_sum: 0,
         }
     }
 }
